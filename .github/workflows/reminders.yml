@@ -9,6 +9,22 @@ on:
     - cron: '0 11 * 1-2,12 *'
   workflow_dispatch: {}   # allow manual runs
 
+      - name: "Preflight: validate required secrets"
+        run: |
+          missing=()
+          for v in TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_FROM TO_PHONE DASHBOARD_LINK; do
+            if [ -z "${!v}" ]; then
+              echo "::error::$v is EMPTY"
+              missing+=("$v")
+            else
+              echo "$v=SET"
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "Missing: ${missing[*]}"
+            exit 1
+          fi
+
 jobs:
   run-reminders:
     runs-on: ubuntu-latest
