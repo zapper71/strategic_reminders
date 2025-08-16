@@ -2,12 +2,36 @@ name: Strategic Reminders
 
 on:
   schedule:
-    # ~6:00 AM America/Toronto. Split for DST vs Standard Time.
-    # DST months (Mar–Nov): Toronto ≈ UTC-4  → 10:00 UTC
-    - cron: '0 10 * 3-11 *'
-    # Standard Time (Dec–Feb): Toronto ≈ UTC-5 → 11:00 UTC
-    - cron: '0 11 * 1-2,12 *'
-  workflow_dispatch: {}   # allow manual runs
+    # 6:00 AM America/Toronto (split for DST vs Standard Time)
+    - cron: '0 10 * 3-11 *'   # Mar–Nov ≈ UTC-4
+    - cron: '0 11 * 1-2,12 *' # Dec–Feb ≈ UTC-5
+  workflow_dispatch: {}
+
+jobs:
+  run-reminders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+      TWILIO_AUTH_TOKEN:  ${{ secrets.TWILIO_AUTH_TOKEN }}
+      TWILIO_FROM:        ${{ secrets.TWILIO_FROM }}
+      TO_PHONE:           ${{ secrets.TO_PHONE }}
+      DASHBOARD_LINK:     ${{ secrets.DASHBOARD_LINK }}
+      HEALTHCHECK_URL:    ${{ secrets.HEALTHCHECK_URL }}
+
+    steps:
+      - name: "Checkout repo"
+        uses: actions/checkout@v4
+
+      - name: "Set up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: "Install dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: "Preflight: validate required secrets"
         run: |
@@ -25,47 +49,22 @@ on:
             exit 1
           fi
 
-jobs:
-  run-reminders:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
-      TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
-      TWILIO_FROM: ${{ secrets.TWILIO_FROM }}
-      TO_PHONE: ${{ secrets.TO_PHONE }}
-      DASHBOARD_LINK: ${{ secrets.DASHBOARD_LINK }}
-      HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
-    steps:
-      - name: "Checkout repo"
-        uses: actions/checkout@v4
-
-      - name: "Set up Python"
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: "Install dependencies"
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      # Optional healthcheck "start" ping
-      - name: "Healthcheck start"
+      - name: "Healthcheck start (optional)"
         if: ${{ env.HEALTHCHECK_URL != '' }}
-        run: |
-          curl -fsS -m 10 --retry 3 "$HEALTHCHECK_URL/start" || true
+        run: curl -fsS -m 10 --retry 3 "$HEALTHCHECK_URL/start" || true
 
-      # Always send the simple daily dashboard link
       - name: "SMS: Daily dashboard link"
         run: |
           python - <<'PY'
-          import os
+          import os, sys
           from twilio.rest import Client
-          acc=os.environ["TWILIO_ACCOUNT_SID"]
-          tok=os.environ["TWILIO_AUTH_TOKEN"]
-          frm=os.environ["TWILIO_FROM"]
-          to =os.environ["TO_PHONE"]
+          def need(k):
+              v=os.environ.get(k)
+              if not v:
+                  print(f"::error::{k} missing"); sys.exit(1)
+              return v
+          acc=need("TWILIO_ACCOUNT_SID"); tok=need("TWILIO_AUTH_TOKEN")
+          frm=need("TWILIO_FROM");        to =need("TO_PHONE")
           link=os.environ.get("DASHBOARD_LINK","")
           body=f"Daily dashboard. Link: {link}"
           print("Sending:", body)
@@ -73,10 +72,6 @@ jobs:
           print("Sent SID:", sid)
           PY
 
-      # Guardrails live inside reminder_sms.py:
-      # - Weekly sends only on Sundays
-      # - Monthly sends only 2 days before month-end
-      # - Quarterly sends only 7 days before quarter-end
       - name: "SMS: Weekly reminder (guarded)"
         run: python reminder_sms.py weekly
 
@@ -86,13 +81,10 @@ jobs:
       - name: "SMS: Quarterly reminder (guarded)"
         run: python reminder_sms.py quarterly
 
-      # Optional healthcheck success/fail pings
       - name: "Healthcheck success"
         if: ${{ success() && env.HEALTHCHECK_URL != '' }}
-        run: |
-          curl -fsS -m 10 --retry 3 "$HEALTHCHECK_URL" || true
+        run: curl -fsS -m 10 --retry 3 "$HEALTHCHECK_URL" || true
 
       - name: "Healthcheck fail"
         if: ${{ failure() && env.HEALTHCHECK_URL != '' }}
-        run: |
-          curl -fsS -m 10 --retry 3 -d "status=fail" "$HEALTHCHECK_URL/fail" || true
+        run: curl -fsS -m 10 --retry 3 -d "status=fail" "$HEALTHCHECK_URL/fail" || true
