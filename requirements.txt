@@ -1,0 +1,5 @@
+twilio==9.3.4
+openpyxl==3.1.5
+python-dateutil==2.9.0.post0
+requests==2.32.3
+Add requirements.txt for GitHub Actions
